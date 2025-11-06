@@ -9,7 +9,7 @@ This is a tutorial on how to build a slack app using slack's python SDK and  pyt
 - Click this link [https://api.slack.com/apps/new](https://api.slack.com/apps/new)
 <img width="1427" height="799" alt="Screenshot 2025-11-06 at 2 12 53 PM" src="https://github.com/user-attachments/assets/f09b8559-c34c-44ff-ad7e-6037d15e73bf" />
 
-- Click "get started". Then in the pop up window, select "From Scratch".
+- Click "Create an App". Then in the pop up window, select "From Scratch".
 - Name the App (e.g. HashtagGame) and pick a workspace to develop your app in (or create a new workspace). Note: Once you choose a workspace to create your app in, you can not change it to a different workspace.
 - Press "create app".
 
