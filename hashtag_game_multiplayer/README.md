@@ -31,3 +31,10 @@ This is a tutorial on how to build a slack app using slack's python SDK and  pyt
   
 - Then press "reinstall my app" (a notification of this usually pops up in a yellow window at the top of the page)
     - Do NOT miss this step
+
+## Enable Socket Mode
+To run this game locally Socket Mode allows your app to receive Slack events over a WebSocket connection instead of needing a public URL for an Events API endpoint.
+1. In your Slack app dashboard, go to Settings → Socket Mode.
+2. Toggle Enable Socket Mode to ON.
+<img width="900" height="899" alt="Screenshot 2025-11-06 at 3 38 02 PM" src="https://github.com/user-attachments/assets/b5d9ba52-0066-4e60-9b0a-c92cacf34d06" />
+
