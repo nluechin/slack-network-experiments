@@ -56,6 +56,6 @@ SLACK_APP_TOKEN=xapp-your-app-token
 GAME_CHANNEL_ID=CYOURCHANNELID        #channel ID's always start with a C and have 11 characters
 ```
 
-💡 Tip: You can find these values in your Slack app dashboard under Basic Information and OAuth & Permissions but more guidance on that coming up later.
+💡 Tip: You can find these values in your Slack app dashboard under Basic Information and OAuth & Permissions. Guidance on how to retrieve these values are found here.
 
 Once you’ve saved your .env file, you’re ready to move on to installing the dependencies and running the Slack bot.
