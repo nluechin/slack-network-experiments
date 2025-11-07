@@ -12,9 +12,9 @@ Before running the Slack bot, download this repository from GitHub.
 Now that you’ve downloaded and unzipped the repository, you’re ready to launch the bot inside your Slack workspace.
 1. Choose which version to run
 
-hashtag_game_individual/ = single-participant version
+- hashtag_game_individual/ = single-participant version
 
-hashtag_game_multiplayer/ = group network experiment version
+- hashtag_game_multiplayer/ = group network experiment version
 
 Open the folder you want to run in your terminal:
 ```
