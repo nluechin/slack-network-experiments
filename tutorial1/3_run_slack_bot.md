@@ -3,7 +3,7 @@
 
 Before running the Slack bot, download this repository from GitHub.
 
-1. At the top of this page, click the green “Code” button.
+1. At the top of [this page](https://github.com/nluechin/slack-network-experiments/tree/main), click the green “Code” button.
 2. Select “Download ZIP.”
 3. Once the ZIP file finishes downloading, unzip it on your computer.
 4. Open the unzipped folder in VS Code (or your preferred editor).
