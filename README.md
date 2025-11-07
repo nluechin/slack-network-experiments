@@ -4,3 +4,4 @@ The directories hashtag_game_multiplayer and hashtag_game_individual contain sof
 
 The Slack app chatbot delivers prompts to participants, records user input automatically, and facilitates asynchronous participation to emulate a more natural messaging or game-like environment. Despite this being more representative of online communities, the system maintains strict experimental control over network pairings and timing to ensure data validity and reproducibility.
 
+mixing.py provided by Dr. Priniski is a Python version of the matlab spatial network pairing logic. This logic is what differentiates the project from standard chat-based apps, ensuring that participant interactions follow an experimental design rather than free-form user behavior.
