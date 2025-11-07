@@ -19,7 +19,9 @@ This is a tutorial on how to build a slack app using slack's python SDK and  pyt
 <img width="1311" height="722" alt="Screenshot 2025-11-06 at 2 26 50 PM" src="https://github.com/user-attachments/assets/1d8c49a7-6395-4b3a-9ac8-a3c9d2eef2ae" />
 - On the page, scroll down a bit to see the header "Scopes" and "Bot Token Scopes". Add the same bot token scopes shown in the screenshot below by clicking "Add an OAuth Scope".
 <img width="641" height="722" alt="Screenshot 2025-11-06 at 2 41 12 PM" src="https://github.com/user-attachments/assets/95040b68-1f16-41db-92bd-e54b30c513d3" />
-(app_mentions:read, channels:read, chat:write, commands, groups:read, im:write, users:read) 
+
+(app_mentions:read, channels:read, chat:write, commands, groups:read, im:write, users:read)
+
 - Then press "reinstall my app" (a notification of this usually pops up in a yellow window at the top of the page)
     - Do NOT miss this step
 
