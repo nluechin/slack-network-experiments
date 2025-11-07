@@ -20,6 +20,10 @@ Open the folder you want to run in your terminal:
 ```
 cd hashtag_game_multiplayer
 ```
+
+> [!IMPORTANT]
+> Make sure your .env file (with your Slack tokens and channel ID) is saved inside the same folder as the Python file you’re running.
+
 ## Start Slack Bot
 Once everything is set up, start the bot by running the Python file. If everything is connected correctly, your terminal should show:
 ```⚡ Slack Bolt app is running!```
