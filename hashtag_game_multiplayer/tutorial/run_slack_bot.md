@@ -1,5 +1,5 @@
-## Run the slack bot
-# Download the Project Files
+# Run the slack bot
+## Download the Project Files
 
 Before running the Slack bot, download this repository from GitHub.
 
@@ -8,7 +8,7 @@ Before running the Slack bot, download this repository from GitHub.
 3. Once the ZIP file finishes downloading, unzip it on your computer.
 4. Open the unzipped folder in VS Code (or your preferred editor).
 
-# Run Slack Bot
+## Run Slack Bot
 Now that you’ve downloaded and unzipped the repository, you’re ready to launch the bot inside your Slack workspace.
 1. Choose which version to run
 
