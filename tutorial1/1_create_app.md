@@ -14,7 +14,7 @@ This is a tutorial on how to build a slack app using slack's python SDK and  pyt
    - Note: Once you choose a workspace to create your app in, you can not change it to a different workspace.
 - Press "Create App".
 
-2. After creating your Slack app, it’s time for the fun part — adding scopes! Scopes define what your app is allowed to do within your workspace. The scopes you choose determine what actions the hashtag game chatbot can perform. To make sure the multiplayer version runs properly, follow the next steps carefully and select the exact scopes listed below.
+2. After creating your Slack app, it’s time for the fun part, adding scopes! Scopes define what your app is allowed to do within your workspace. The scopes you choose determine what actions the hashtag game chatbot can perform. To make sure the multiplayer version runs properly, follow the next steps carefully and select the exact scopes listed below.
 - After clicking "create app", you will be brought to the app's home page. on the left side menu click OAuth & Permissions.
 <img width="1311" height="722" alt="Screenshot 2025-11-06 at 2 26 50 PM" src="https://github.com/user-attachments/assets/1d8c49a7-6395-4b3a-9ac8-a3c9d2eef2ae" />
 
