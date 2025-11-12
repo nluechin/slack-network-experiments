@@ -99,6 +99,6 @@ def network_connection_spatial(randseed, nodesnum, trialnum, neighborsize, flags
     return np.array(connectmat)
 
 
-conn = network_connection_spatial(randseed=1, nodesnum=4, trialnum=5, neighborsize=2)
-print(conn[:40])
+#conn = network_connection_spatial(randseed=1, nodesnum=4, trialnum=5, neighborsize=2)
+#print(conn[:40])
 
