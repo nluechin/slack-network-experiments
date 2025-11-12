@@ -75,11 +75,11 @@ def score_and_outcome(rid):
     sa = normalize_tag(st["subs"][a]) #hashtag submission from player a
     sb = normalize_tag(st["subs"][b]) #hashtag submission from player b
     if sa and sb and sa == sb:
-        st["game_outcome"] = "✅ match"
+        st["game_outcome"] = "match"
         player_points[a] += 1
         player_points[b] += 1
     else:
-        st["game_outcome"] = "❌ no match"
+        st["game_outcome"] = "no match"
 
 def build_pair_schedule_spatial(players, *, randseed=1, trialnum=5, neighborsize=4): #default parameters, do not c
     """Builds a pairing schedule (player1, player2, trial_number) using spatial network logic.
@@ -211,6 +211,35 @@ def _send_pair_ephemerals(client, channel_id, a, b, t, rid):
                 }],
         )
 
+def _announce_match(client, rid: str):
+    """Sends an ephemeral message to both players with the match result and hashtags."""
+    st = round_state.get(rid)
+    if not st:
+        return
+    a, b = st["pair"]
+    ch = st["channel_id"]
+    t = st["trial"]
+    sa, sb = st["subs"][a], st["subs"][b]
+    outcome = st.get("game_outcome") or "❌ no match"
+
+    def fmt_tag(s):
+        s = (s or "").strip()
+        return f"#{s}" if s else "∅"
+
+    for user, partner, my_tag, their_tag in ((a, b, sa, sb), (b, a, sb, sa)):
+        client.chat_postEphemeral(
+            channel=ch,
+            user=user,
+            text=(
+                f"*Trial {t} result:* {outcome}\n"
+                f"• You: {fmt_tag(my_tag)}\n"
+                f"• Partner <@{partner}>: {fmt_tag(their_tag)}\n"
+                + ("Both +1 point for a match." if outcome.startswith("✅") else "")
+            ),
+        )
+
+
+
 def start_trial(client, t: int):
     """Open all pairs for trial t (concurrent within trial)."""
     ch = current_game["channel_id"]
@@ -329,6 +358,8 @@ def handle_submit(ack, body, client, view):
 
         # append to CSV immediately
         _append_round_to_csv(rid)
+
+        _announce_match(client, rid)
 
         # Check if all rounds in this trial are complete and start the next one
         maybe_advance_trial(client)
