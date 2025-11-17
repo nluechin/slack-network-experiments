@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from mixing import network_connection_spatial
+import traceback  # make sure this is at the top with other imports
+
 
 load_dotenv()
 SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
@@ -16,6 +18,8 @@ SLACK_APP_TOKEN = os.environ["SLACK_APP_TOKEN"]  # Socket Mode
 GAME_CHANNEL_ID = os.environ.get("GAME_CHANNEL_ID")  
 
 app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)
+
+ROUND_TIMEOUT_SECONDS = 60  # or whatever you want
 
 round_state = {}                   # Tracks per-round metadata (e.g., start/end timestamps)
 # round_state structure:
@@ -133,9 +137,40 @@ def group_pairs_by_trial(schedule_with_trials):
         grouped[t].append((a, b))
     return dict(sorted(grouped.items()))
 
+ROUND_TIMEOUT_SECONDS = 60  # or whatever you want
+
+def schedule_round_timeout(rid, client, timeout=ROUND_TIMEOUT_SECONDS):
+    """
+    After `timeout` seconds, if the round is still open,
+    mark it as closed due to timeout, write CSV, and maybe advance the trial.
+    """
+    def _timeout_worker():
+        time.sleep(timeout)
+
+        st = round_state.get(rid)
+        if not st:
+            return
+
+        # If already closed (both submitted and handled), do nothing
+        if st.get("closed"):
+            return
+
+        # Round timed out
+        st["closed"] = True
+        if not st.get("game_outcome"):
+            st["game_outcome"] = "timeout"
+
+        # Write a row even if one or both hashtags are missing
+        _append_round_to_csv(rid)
+
+        # Try to advance to the next trial
+        maybe_advance_trial(client)
+
+    threading.Thread(target=_timeout_worker, daemon=True).start()
+
 # CSV helpers (auto-write) 
 def _init_csv():
-    """initializes csv with headers."""
+    """Initializes CSV with headers and returns path."""
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = f"submissions_{ts}.csv"
     with _csv_lock, open(path, "w", newline="") as f:
@@ -147,20 +182,24 @@ def _init_csv():
             "player_b",
             "player_a_hashtag",
             "player_b_hashtag",
-            "completed",
+            "completed",      # 0 = incomplete, 1 = both submitted
             "started_at",
             "game_outcome",
         ])
     return path
 
-def _append_round_to_csv(rid: str):
+def _append_round_to_csv(rid):
     """Append one round's submission data and outcome to the game CSV."""
     st = round_state.get(rid)
     if not st:
         return
+
     a, b = st["pair"]
-    sa = st["subs"][a]
-    sb = st["subs"][b]
+
+    # Safe even if one or both players never submitted
+    sa = st["subs"].get(a, "")
+    sb = st["subs"].get(b, "")
+
     row = [
         rid,
         st["trial"],
@@ -168,90 +207,132 @@ def _append_round_to_csv(rid: str):
         b,
         sa,
         sb,
-        st["completed"],
+        1 if st.get("completed") else 0,  # 1 only if both submitted
         st["started_at"],
         st.get("game_outcome"),
     ]
+
     path = current_game.get("csv_path")
     if not path:
         return
+
     with _csv_lock, open(path, "a", newline="") as f:
         csv.writer(f).writerow(row)
 
+def _announce_match(client, rid: str):
+    """
+    Send round result only to the two players in this pair (ephemeral),
+    instead of posting anything to the whole channel.
+    """
+    st = round_state.get(rid)
+    if not st:
+        return
+
+    a, b = st["pair"]
+    ch = st["channel_id"]
+
+    sa = (st["subs"].get(a) or "").strip()
+    sb = (st["subs"].get(b) or "").strip()
+    outcome = st.get("game_outcome") or "no outcome recorded"
+
+    # Get each player's current points (if you use player_points dict)
+    points_a = player_points.get(a, 0)
+    points_b = player_points.get(b, 0)
+
+    # Message just for player a
+    client.chat_postEphemeral(
+        channel=ch,
+        user=a,
+        text=(
+            f"*Trial {st['trial']} result*\n"
+            f"• Your hashtag: `{sa or '(no hashtag)'}`\n"
+            f"• Partner: `{sb or '(no hashtag)'}`\n"
+            f"• Outcome: *{outcome}*\n"
+            f"• Your total points: *{points_a}*"
+        ),
+    )
+
+    # Message just for player b
+    client.chat_postEphemeral(
+        channel=ch,
+        user=b,
+        text=(
+            f"*Trial {st['trial']} result (just for you)*\n"
+            f"• Your hashtag: `{sb or '(no hashtag)'}`\n"
+            f"• Partner <@{a}>: `{sa or '(no hashtag)'}`\n"
+            f"• Outcome: *{outcome}*\n"
+            f"• Your total points: *{points_b}*"
+        ),
+    )
+
+
+
+
 # Trial orchestration 
 def _send_pair_ephemerals(client, channel_id, a, b, t, rid):
+    """
+    Set up round state for pair (a, b) in trial t and send each their ephemeral
+    with a 'Submit hashtag' button that opens the modal.
+    """
     # Create round record
     round_state[rid] = {
         "pair": (a, b),
         "trial": t,
-        "subs": {a: None, b: None},
+        "subs": {a: "", b: ""},           # empty string instead of None
         "submitted": {a: False, b: False},
-        "completed": False,
-        "started_at": time.time(),
+        "completed": False,               # both submitted?
+        "closed": False,                  # finished by submit or timeout
+        "started_at": datetime.now().isoformat(),
         "channel_id": channel_id,
         "game_outcome": None,
     }
-    # Send ephemerals to both
+
+    # Send ephemerals to both, with a button that clearly shows the trial
     for user, partner in ((a, b), (b, a)):
         client.chat_postEphemeral(
             channel=channel_id,
             user=user,
-            text=f"*Trial {t} • Your match vs* <@{partner}>. Submit when ready:",
+            text=f"*Trial {t}* • You are matched with <@{partner}>.",
             blocks=[
-                {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Trial {t}*\n Click below to submit your hashtag."
+                    },
+                },
                 {
                     "type": "actions",
-                    "elements": [{
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "Submit hashtag"},
-                        "style":"primary",
-                        "action_id": "open_submit_modal",
-                        "value": rid,
-                    }]
-                }],
+                    "elements": [
+                        {
+                            "type": "button",
+                            "text": {
+                                "type": "plain_text",
+                                "text": f"Submit hashtag (Trial {t})"
+                            },
+                            "style": "primary",
+                            "action_id": "open_submit_modal",  # wired to the @app.action below
+                            "value": rid,                       # we pass rid so we can look up trial later
+                        }
+                    ]
+                }
+            ],
         )
 
-def _announce_match(client, rid: str):
-    """Sends an ephemeral message to both players with the match result and hashtags."""
-    st = round_state.get(rid)
-    if not st:
-        return
-    a, b = st["pair"]
-    ch = st["channel_id"]
-    t = st["trial"]
-    sa, sb = st["subs"][a], st["subs"][b]
-    outcome = st.get("game_outcome") or "❌ no match"
-
-    def fmt_tag(s):
-        s = (s or "").strip()
-        return f"#{s}" if s else "∅"
-
-    for user, partner, my_tag, their_tag in ((a, b, sa, sb), (b, a, sb, sa)):
-        client.chat_postEphemeral(
-            channel=ch,
-            user=user,
-            text=(
-                f"*Trial {t} result:* {outcome}\n"
-                f"• You: {fmt_tag(my_tag)}\n"
-                f"• Partner <@{partner}>: {fmt_tag(their_tag)}\n"
-                + ("Both +1 point for a match." if outcome.startswith("✅") else "")
-            ),
-        )
+    # Start timeout clock for this round
+    schedule_round_timeout(rid, client)
 
 
 
-def start_trial(client, t: int):
+def start_trial(client, t):
     """Open all pairs for trial t (concurrent within trial)."""
     ch = current_game["channel_id"]
     pairs = current_game["schedule_by_trial"][t]
     rids = []
 
-    #Ensure everyone appears on /scores including players with 0 points.
+    # Ensure everyone appears on /scores including players with 0 points.
     for u in current_game["players"]:
         _ = player_points[u]
-
-    #Public announce for this trial 
-    app.client.chat_postMessage(channel=ch, text=f"Submit your hashtag for Trial {t}.")
 
     # len(pairs) = number of player pairs for this trial
     # we make 1 thread per pair so all pairs can start concurrently
@@ -259,61 +340,82 @@ def start_trial(client, t: int):
         for a, b in pairs:
             rid = make_round_id()
             rids.append(rid)
-            pool.submit(_send_pair_ephemerals, client, ch, a, b, t, rid) # submit the Slack message job to the thread pool
-    
+            pool.submit(_send_pair_ephemerals, client, ch, a, b, t, rid)
+
     # after all threads complete, store the round IDs for this trial
     current_game["rids_by_trial"][t] = rids
     current_game["current_trial"] = t
 
+
 def maybe_advance_trial(client):
-    """If all pairs in current trial completed, open the next trial (if any)."""
+    """If all pairs in current trial are closed (submitted or timed out), open the next trial (if any)."""
     t = current_game["current_trial"]
     rids = current_game["rids_by_trial"].get(t, [])
     if not rids:
         return
-    if all(round_state[r]["completed"] for r in rids):
+
+    # All rounds must be closed, regardless of whether both submitted
+    if all(round_state[r].get("closed") for r in rids):
         next_t = t + 1
         if next_t <= current_game["trialnum"]:
             start_trial(client, next_t)
         else:
             app.client.chat_postMessage(
                 channel=current_game["channel_id"],
-                text=f"All trials complete. Type `@Demo App scores` for the leaderboard."
+                text="All trials complete. Type `@Demo App scores` for the leaderboard."
             )
 
+
+
+
 # ============== Actions & Views ==============
+
 @app.action("open_submit_modal")
 def open_submit_modal(ack, body, client):
-    """
-    Triggered when a player clicks the "Submit hashtag" button.
-    Opens a Slack modal for the player to enter their hashtag.
-    """
-    ack()   # acknowledge the action so Slack doesn't time out                     
-    rid = body["actions"][0]["value"]
+    ack()
 
-    # Open a modal (popup form) for the player to submit their hashtag
+    user = body["user"]["id"]
+    rid = body["actions"][0]["value"]  # we passed rid in the button
+    st = round_state.get(rid)
+    if not st:
+        return
+
+    trial_num = st["trial"]  # get the trial #
+
+    trigger_id = body["trigger_id"]
+
     client.views_open(
-        trigger_id=body["trigger_id"],
+        trigger_id=trigger_id,
         view={
             "type": "modal",
             "callback_id": "submit_hashtag_view",
             "private_metadata": rid,
-            "title": {"type": "plain_text", "text": "Submit hashtag"},
+            
+            # Modal title with trial #
+            "title": {
+                "type": "plain_text",
+                "text": f"Trial {trial_num}"
+            },
+
             "submit": {"type": "plain_text", "text": "Submit"},
             "close": {"type": "plain_text", "text": "Cancel"},
-            "blocks": [{
-                "type": "input",
-                "block_id": "hs",
-                "label": {"type": "plain_text", "text": "Write a hashtag for the event"},
-                "element": {
-                    "type": "plain_text_input",
-                    "action_id": "val",
-                    "initial_value": "#",
-                    "placeholder": {"type": "plain_text", "text": "#example"},
-                },
-            }]
-        },
+
+            "blocks": [
+                {
+                    "type": "input",
+                    "block_id": "hs",
+                    "element": {
+                        "type": "plain_text_input",
+                        "action_id": "val",
+                        "initial_value": "#",
+                        "placeholder": {"type": "plain_text", "text": "#example"}
+                    },
+                    "label": {"type": "plain_text", "text": "Write a Hashtag for the event"}
+                }
+            ]
+        }
     )
+
 
 @app.view("submit_hashtag_view")
 def handle_submit(ack, body, client, view):
@@ -332,7 +434,7 @@ def handle_submit(ack, body, client, view):
     except Exception:
         value_raw = ""
 
-    #If, for any reason, this round_id doesn’t exist in memory anymore (expired modal) the entire code wont just crash
+    # If, for any reason, this round_id doesn’t exist in memory anymore, bail quietly
     if rid not in round_state:
         return
 
@@ -352,16 +454,16 @@ def handle_submit(ack, body, client, view):
     # If both submitted: complete, score, outcome, notify both, append CSV, maybe advance trial
     if st["submitted"][a] and st["submitted"][b]:
         st["completed"] = True
+        st["closed"] = True
+
         score_and_outcome(rid)  # sets st['game_outcome'] and gives +1 each on match
-        sa, sb = st["subs"][a], st["subs"][b]
-        outcome = st["game_outcome"]
 
         # append to CSV immediately
         _append_round_to_csv(rid)
 
         _announce_match(client, rid)
 
-        # Check if all rounds in this trial are complete and start the next one
+        # Check if all rounds in this trial are complete/closed and start the next one
         maybe_advance_trial(client)
 
 
@@ -427,7 +529,7 @@ def on_mention(body, say, client):
         return
 
     # Fallback help
-    say("Try: `@Demo App start` to begin, `@Demo App scores` to view the leaderboard. CSV autosaves every completed pair.")
+    say("Try: `@Demo App start` to begin, `@Demo App scores` to view the leaderboard.")
 
 
 
