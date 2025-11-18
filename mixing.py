@@ -89,16 +89,16 @@ def network_connection_spatial(randseed, nodesnum, trialnum, neighborsize, flags
             row[0], row[1] = row[1], row[0]
 
     # Optionally save to CSV
-    #filename = f"connection_{nodesnum}.{trialnum}.{neighborsize}_{randseed}.csv"
-    #with open(filename, 'w', newline='') as f:
-    #    writer = csv.writer(f)
-    #    writer.writerow(['Node1', 'Node2', 'Trial'])
-    #    writer.writerows(connectmat)
+    filename = f"connection_{nodesnum}.{trialnum}.{neighborsize}_{randseed}.csv"
+    with open(filename, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Node1', 'Node2', 'Trial'])
+        writer.writerows(connectmat)
 
     #print(f"Connection matrix saved to {filename}")
     return np.array(connectmat)
 
 
-#conn = network_connection_spatial(randseed=1, nodesnum=4, trialnum=5, neighborsize=2)
+#conn = network_connection_spatial(randseed=1, nodesnum=40, trialnum=5, neighborsize=39)
 #print(conn[:40])
 
