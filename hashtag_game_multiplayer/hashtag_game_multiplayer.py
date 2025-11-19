@@ -8,18 +8,22 @@ from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from mixing import network_connection_spatial
-import traceback  # make sure this is at the top with other imports
+import traceback 
 
 
 load_dotenv()
 SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 SLACK_SIGNING_SECRET = os.environ["SLACK_SIGNING_SECRET"]
 SLACK_APP_TOKEN = os.environ["SLACK_APP_TOKEN"]  # Socket Mode
-GAME_CHANNEL_ID = os.environ.get("GAME_CHANNEL_ID")  
+GAME_CHANNEL_ID = os.environ.get("GAME_CHANNEL_ID") 
+
+# Game Settings
+TRIALNUM = 3                    # Number of rounds in a game
+NEIGHBORSIZE = 2                # Size of each player's neighborhood in the spatial network
+ROUND_TIMEOUT_SECONDS = 60      # How long players have to respond in each round (seconds)
+MIN_PLAYERS = 4                # Minimum number of players required to start a game 
 
 app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)
-
-ROUND_TIMEOUT_SECONDS = 60  # or whatever you want
 
 round_state = {}                   # Tracks per-round metadata (e.g., start/end timestamps)
 # round_state structure:
@@ -32,7 +36,7 @@ round_state = {}                   # Tracks per-round metadata (e.g., start/end 
 #       "completed": bool,                      # True when both submitted
 #       "started_at": float,                    # Unix timestamp when round started
 #       "channel_id": str,                      # Slack channel ID for this round
-#       "game_outcome": str | None              # "✅ match" or "❌ no match"
+#       "game_outcome": str | None              # "match" or "no match"
 #   },
 #   ...
 # }
@@ -41,8 +45,8 @@ player_points = defaultdict(int)   # Maps user_id -> accumulated score
 current_game = {
     "players": [],         
     "channel_id": None,
-    "trialnum": 0,
-    "neighborsize": 2,
+    "trialnum": TRIALNUM,
+    "neighborsize": NEIGHBORSIZE,
     "current_trial": 0,
     "schedule_by_trial": {},   # {t: [(a,b), ...]}
     "rids_by_trial": {},       # {t: [rid, ...]}
@@ -70,6 +74,70 @@ def get_channel_players(client, channel_id):
     members = resp.get("members", [])
     return [m for m in members if m != bot_user_id]
 
+def start_game_when_min_players_reached(client, channel_id):
+    """
+    Auto start the game in the designated game channel once MIN_PLAYERS
+    are present.
+    """
+
+    if not channel_id:
+        return
+
+    # Only run in the one designated game channel
+    if GAME_CHANNEL_ID and channel_id != GAME_CHANNEL_ID:
+        return
+
+    # Do not start another game if one is already in progress
+    if current_game.get("channel_id") and current_game.get("current_trial", 0) > 0:
+        return
+
+    players = get_channel_players(client, channel_id)
+    num_players = len(players)
+
+    # Wait until threshold is reached
+    if num_players < MIN_PLAYERS:
+        return
+
+    trialnum = TRIALNUM       # tunable
+    neighborsize = NEIGHBORSIZE   # tunable
+
+    # Generate round schedule using spatial pairing logic
+    schedule = build_pair_schedule_spatial(
+        players,
+        randseed=1,
+        trialnum=trialnum,
+        neighborsize=neighborsize,
+    )
+    schedule_by_trial = group_pairs_by_trial(schedule)
+
+    # Initialize player scores (ensures 0 shows on leaderboard)
+    for u in players:
+        _ = player_points[u]
+
+    # Create a new CSV log for this session
+    csv_path = _init_csv()
+
+    # Store the current game configuration
+    current_game.update({
+        "players": players,
+        "channel_id": channel_id,
+        "trialnum": trialnum,
+        "neighborsize": neighborsize,
+        "current_trial": 0,
+        "schedule_by_trial": schedule_by_trial,
+        "rids_by_trial": {},
+        "csv_path": csv_path,
+    })
+
+    # Announce game start and begin first trial
+    app.client.chat_postMessage(
+        channel=channel_id,
+        text=f"Hashtag Game starting automatically with {num_players} players • {trialnum} trials."
+    )
+
+    start_trial(client, 1)
+
+
 def score_and_outcome(rid):
     """Evaluate a round, update points and store outcome."""
     st = round_state.get(rid)
@@ -85,7 +153,7 @@ def score_and_outcome(rid):
     else:
         st["game_outcome"] = "no match"
 
-def build_pair_schedule_spatial(players, *, randseed=1, trialnum=5, neighborsize=4): #default parameters, do not c
+def build_pair_schedule_spatial(players, *, randseed=1, trialnum=5, neighborsize=4): #default parameters, do not change experiment values here
     """Builds a pairing schedule (player1, player2, trial_number) using spatial network logic.
     
     Each row in the output corresponds to a pair of players for a given trial.
@@ -137,15 +205,13 @@ def group_pairs_by_trial(schedule_with_trials):
         grouped[t].append((a, b))
     return dict(sorted(grouped.items()))
 
-ROUND_TIMEOUT_SECONDS = 60  # or whatever you want
-
 def schedule_round_timeout(rid, client, timeout=ROUND_TIMEOUT_SECONDS):
     """
     After `timeout` seconds, if the round is still open,
     mark it as closed due to timeout, write CSV, and maybe advance the trial.
     """
     def _timeout_worker():
-        time.sleep(timeout)
+        time.sleep(timeout)       # Sleep for `timeout` seconds. After the pause, this thread will check if the round is still open.
 
         st = round_state.get(rid)
         if not st:
@@ -158,7 +224,7 @@ def schedule_round_timeout(rid, client, timeout=ROUND_TIMEOUT_SECONDS):
         # Round timed out
         st["closed"] = True
         if not st.get("game_outcome"):
-            st["game_outcome"] = "timeout"
+            st["game_outcome"] = "timeout"   #If the round doesn’t already have an outcome recorded (like "submitted"),set the outcome to "timeout".
 
         # Write a row even if one or both hashtags are missing
         _append_round_to_csv(rid)
@@ -166,6 +232,9 @@ def schedule_round_timeout(rid, client, timeout=ROUND_TIMEOUT_SECONDS):
         # Try to advance to the next trial
         maybe_advance_trial(client)
 
+    # Start a background thread that waits `timeout` seconds, then checks
+    # whether the round is still open and times it out if needed. Using
+    # daemon=True ensures this timer thread won't block the bot from exiting.
     threading.Thread(target=_timeout_worker, daemon=True).start()
 
 # CSV helpers (auto-write) 
@@ -219,10 +288,9 @@ def _append_round_to_csv(rid):
     with _csv_lock, open(path, "a", newline="") as f:
         csv.writer(f).writerow(row)
 
-def _announce_match(client, rid: str):
+def _announce_match(client, rid):
     """
-    Send round result only to the two players in this pair (ephemeral),
-    instead of posting anything to the whole channel.
+    Send round result only to the two players in this pair (ephemeral)
     """
     st = round_state.get(rid)
     if not st:
@@ -231,8 +299,8 @@ def _announce_match(client, rid: str):
     a, b = st["pair"]
     ch = st["channel_id"]
 
-    sa = (st["subs"].get(a) or "").strip()
-    sb = (st["subs"].get(b) or "").strip()
+    sa = (st["subs"].get(a) or "").strip()          #submission a
+    sb = (st["subs"].get(b) or "").strip()          #submission b
     outcome = st.get("game_outcome") or "no outcome recorded"
 
     # Get each player's current points (if you use player_points dict)
@@ -257,9 +325,9 @@ def _announce_match(client, rid: str):
         channel=ch,
         user=b,
         text=(
-            f"*Trial {st['trial']} result (just for you)*\n"
+            f"*Trial {st['trial']} result *\n"
             f"• Your hashtag: `{sb or '(no hashtag)'}`\n"
-            f"• Partner <@{a}>: `{sa or '(no hashtag)'}`\n"
+            f"• Partner: `{sa or '(no hashtag)'}`\n"
             f"• Outcome: *{outcome}*\n"
             f"• Your total points: *{points_b}*"
         ),
@@ -426,8 +494,8 @@ def handle_submit(ack, body, client, view):
     """
     ack()
 
-    # Extract metadata from Slack payload
-    rid = view["private_metadata"]    # passed from open_submit_modal()
+    #Extract metadata from Slack payload
+    rid = view["private_metadata"]    #passed from open_submit_modal()
     user = body["user"]["id"]
     try:
         value_raw = (view["state"]["values"]["hs"]["val"]["value"] or "").strip()
@@ -469,68 +537,51 @@ def handle_submit(ack, body, client, view):
 
 
 # ============== Mention-based controls ==================
+@app.event("member_joined_channel")
+def handle_member_joined_channel(body, client, logger):
+    """
+    Whenever someone joins a channel, check if we should auto start the game.
+    """
+    try:
+        event = body.get("event", {})
+        channel_id = event.get("channel")
+        start_game_when_min_players_reached(client, channel_id)
+    except Exception:
+        logger.error("Error in handle_member_joined_channel", exc_info=True)
+
 @app.event("app_mention")
 def on_mention(body, say, client):
     """
-    Controls via mention in channel:
-      @Demo App start
+    Mention controls in channel:
       @Demo App scores
-   
     """
-    #Extract message context
     event = body.get("event", {})
     text = (event.get("text") or "").lower()
-    channel_id = event.get("channel")
 
-    #when "@Demo App start" is typed in the channel then launches a new game.
-    if "start" in text:
-        players = get_channel_players(client, channel_id)  # even count assumed
-        trialnum = 5 #tunable
-        neighborsize = 4 #tunable
-
-       # Generate round schedule using spatial pairing logic
-        schedule = build_pair_schedule_spatial(
-            players,
-            randseed=1,
-            trialnum=trialnum,
-            neighborsize=neighborsize,
-        )
-        schedule_by_trial = group_pairs_by_trial(schedule)
-
-       # Initialize player scores (ensures 0 shows on leaderboard)
+    if "scores" in text:
+        # Ensure every current player has a score entry
+        players = current_game.get("players", [])
         for u in players:
             _ = player_points[u]
 
-        # Create a new CSV log for this session
-        csv_path = _init_csv()
+        # Build (user, points) list only for current players
+        scores = [(u, player_points[u]) for u in players]
 
-        # Reset and store the current game configuration
-        current_game.update({
-            "players": players,
-            "channel_id": channel_id,
-            "trialnum": trialnum,
-            "neighborsize": neighborsize,
-            "current_trial": 0,
-            "schedule_by_trial": schedule_by_trial,
-            "rids_by_trial": {},
-            "csv_path": csv_path,
-        })
-        # Announce game start and begin first trial
-        say(f"Hashtag Game starting with {len(players)} players • {trialnum} trials.")
-        start_trial(client, 1)
-        return
+        # Sort by points (desc), then user ID, and take top 3
+        top_three = sorted(scores, key=lambda x: (-x[1], x[0]))[:3]
 
-    #when "@Demo App scores" is typed in the channel then bot displays current leaderboard.
-    if "scores" in text:
-        for u in current_game.get("players", []):
-            _ = player_points[u]
-        lines = [f"<@{u}>: {pts}" for u, pts in sorted(player_points.items(), key=lambda x: (-x[1], x[0]))] # Sort by score (descending), then user ID (stable)
-        say("*Leaderboard*\n" + ("\n".join(lines) if lines else "_No scores yet._"))
+        if not top_three:
+            say("*Leaderboard*\n_No scores yet._")
+            return
+
+        masked = lambda uid: f"Anon-{uid[-3:]}"
+        lines = [f"{masked(u)}: {pts}" for u, pts in top_three]
+
+        say("*Top 3 Leaderboard*\n" + "\n".join(lines))
         return
 
     # Fallback help
-    say("Try: `@Demo App start` to begin, `@Demo App scores` to view the leaderboard.")
-
+    say("Try: `@Demo App scores` to view the leaderboard.")
 
 
 
